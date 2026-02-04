@@ -1,0 +1,18 @@
+{
+  "name": "koza-takip",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  },
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,green \"npm run dev -w @kozatakip/api\" \"npm run dev -w @kozatakip/web\"",
+    "dev:api": "npm run dev -w @kozatakip/api",
+    "dev:web": "npm run dev -w @kozatakip/web",
+    "build": "npm run build -w @kozatakip/shared && npm run build -w @kozatakip/api && npm run build -w @kozatakip/web",
+    "typecheck": "npm run typecheck -w @kozatakip/shared && npm run typecheck -w @kozatakip/api && npm run typecheck -w @kozatakip/web"
+  }
+}

@@ -1,0 +1,48 @@
+services:
+  dev:
+    image: node:20-alpine
+    working_dir: /work
+    volumes:
+      - ./:/work
+    command: ["sh", "-lc", "sleep infinity"]
+
+  db:
+    image: mysql:8.4
+    environment:
+      - MYSQL_ROOT_PASSWORD=kozatakip_root
+      - MYSQL_DATABASE=kozatakip
+      - MYSQL_USER=kozatakip
+      - MYSQL_PASSWORD=kozatakip
+    ports:
+      - "3306:3306"
+    volumes:
+      - kozatakip_mysql_data:/var/lib/mysql
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      - PORT=4000
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_USER=kozatakip
+      - DB_PASSWORD=kozatakip
+      - DB_NAME=kozatakip
+    depends_on:
+      - db
+    ports:
+      - "4000:4000"
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    depends_on:
+      - api
+    ports:
+      - "8080:80"
+
+volumes:
+  kozatakip_mysql_data:

@@ -1,0 +1,17 @@
+{
+  "name": "KozaTakip Dev",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "workspaceFolder": "/workspaces/kozatakip",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "typescript.tsdk": "node_modules/typescript/lib",
+        "typescript.enablePromptUseWorkspaceTsdk": true
+      }
+    }
+  },
+  "postCreateCommand": "npm install && npm run build -w @kozatakip/shared",
+  "remoteUser": "node"
+}

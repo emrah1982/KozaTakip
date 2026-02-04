@@ -1,0 +1,25 @@
+{
+  "name": "@kozatakip/shared",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "../../node_modules/.bin/tsc -w -p tsconfig.json",
+    "build": "../../node_modules/.bin/tsc -p tsconfig.json",
+    "typecheck": "../../node_modules/.bin/tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  }
+}
