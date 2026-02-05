@@ -120,6 +120,7 @@ Detaylı evre bazlı referanslar:
 * `docs/ALARM_VERILERINDEN_AI_FEATURE_LISTESI.md`
 * `docs/BESLEME_PLANI_VE_YEMEK_RECETELERI.md`
 * `docs/GERCEK_DUNYA_KALITE_OLCUMU.md`
+* `docs/GOMLEK_DEGISIMI_MOLTING.md`
 
 ---
 

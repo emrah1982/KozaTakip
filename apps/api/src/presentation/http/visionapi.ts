@@ -11,6 +11,69 @@ function asyncHandler(
   };
 }
 
+async function proxyStage(req: express.Request, res: express.Response) {
+  const urlRaw = typeof req.query.url === "string" ? req.query.url : null;
+  if (!urlRaw) {
+    res.status(400).json({ error: "url is required" });
+    return;
+  }
+
+  const stage = (req.body as any)?.stage;
+  if (typeof stage !== "string" || stage.trim().length === 0) {
+    res.status(400).json({ error: "stage is required" });
+    return;
+  }
+
+  let u: URL;
+  try {
+    u = new URL(urlRaw);
+  } catch {
+    res.status(400).json({ error: "Invalid url" });
+    return;
+  }
+
+  if (!(u.protocol === "http:" || u.protocol === "https:")) {
+    res.status(400).json({ error: "Only http/https allowed" });
+    return;
+  }
+
+  const allowlist = parseAllowlist();
+  if (!isAllowedProxyTarget(u, allowlist)) {
+    res.status(403).json({ error: "Target not allowed" });
+    return;
+  }
+
+  const ctrl = new AbortController();
+  const timeoutMs = 7000;
+  const tid = setTimeout(() => ctrl.abort(), timeoutMs);
+
+  try {
+    const upstream = await fetch(u.toString(), {
+      method: "POST",
+      signal: ctrl.signal,
+      headers: {
+        "user-agent": "kozatakip-api-vision-proxy",
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify({ stage: stage.trim() }),
+    });
+
+    if (!upstream.ok) {
+      res.status(502).json({ error: `Upstream error: ${upstream.status}` });
+      return;
+    }
+
+    const json = await upstream.json().catch(() => ({ ok: true }));
+    res.status(200).json(json);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "Proxy error";
+    res.status(502).json({ error: msg });
+  } finally {
+    clearTimeout(tid);
+  }
+}
+
 function isFiniteNumber(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v);
 }
@@ -136,6 +199,13 @@ export function createVisionRouter(repo: MessageRepository) {
     "/proxy/yolo",
     asyncHandler(async (req: express.Request, res: express.Response) => {
       await proxyFetch(req, res, "yolo");
+    })
+  );
+
+  router.post(
+    "/proxy/stage",
+    asyncHandler(async (req: express.Request, res: express.Response) => {
+      await proxyStage(req, res);
     })
   );
 

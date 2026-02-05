@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "../layout/AppShell";
 import { Panel } from "../components/Panel";
 import { Tabs } from "../components/Tabs";
-import { getDeviceConfig, putDeviceConfig, type DeviceConfig, type FeedingPlan, type StageThresholds } from "../services/api";
+import { getDeviceConfig, pushVisionStage, putDeviceConfig, type DeviceConfig, type FeedingPlan, type StageThresholds } from "../services/api";
 
 const DEVICE_ID = import.meta.env.VITE_DEVICE_ID ?? "wemos-d1-r32-01";
 
@@ -275,6 +275,18 @@ export function SettingsPage() {
         setSuccess("Kaydedildi. Cihaz periyodik olarak alıp NVS'e yazacak.");
         if (typeof window !== "undefined") {
           window.localStorage.setItem("koza:device_config:updated_at", String(Date.now()));
+        }
+
+        const activeStage = typeof cfg.active_stage === "string" ? cfg.active_stage : "";
+        const yoloUrl = typeof window !== "undefined" ? window.localStorage.getItem("koza:vision:yolo_results_url") ?? "" : "";
+        if (activeStage && yoloUrl) {
+          try {
+            const u = new URL(yoloUrl);
+            const target = `${u.origin}/config/stage`;
+            void pushVisionStage({ targetUrl: target, stage: activeStage });
+          } catch {
+            // ignore
+          }
         }
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Bilinmeyen hata"))

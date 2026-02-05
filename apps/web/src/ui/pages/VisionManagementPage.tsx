@@ -301,6 +301,7 @@ function computeEnvStability(envSeries: unknown, thresholds: StageThresholds | n
 }
 
 function computeQualityFromYolo(yoloRaw: unknown, envStabilityScore: number): {
+  applicable: boolean;
   size: number;
   color: number;
   homogeneity: number;
@@ -322,6 +323,24 @@ function computeQualityFromYolo(yoloRaw: unknown, envStabilityScore: number): {
     const x = s.toLowerCase();
     return x.includes("cocoon") || x.includes("koza");
   };
+
+  const cocoonCount = labels.filter((s) => isCocoonLike(s)).length;
+  const env_stability = Math.max(0, Math.min(100, Math.round(envStabilityScore)));
+
+  if (cocoonCount === 0) {
+    reasons.push("Koza tespit edilmedi: koza kalite skoru bu evrede hesaplanmaz (N/A)");
+    return {
+      applicable: false,
+      size: 0,
+      color: 0,
+      homogeneity: 0,
+      env_stability,
+      quality_score: 0,
+      grade: "C",
+      market_recommendation: "reject_or_rework",
+      reasons,
+    };
+  }
 
   const readBox = (d: Record<string, unknown>) => {
     const bbox = Array.isArray(d.bbox) ? (d.bbox as unknown[]) : null;
@@ -467,8 +486,6 @@ function computeQualityFromYolo(yoloRaw: unknown, envStabilityScore: number): {
   if (healthyCount > 0) reasons.push(`Sağlıklı tespit: ${healthyCount}`);
   if (diseasedCount > 0) reasons.push(`Hastalıklı tespit: ${diseasedCount}`);
 
-  const env_stability = Math.max(0, Math.min(100, Math.round(envStabilityScore)));
-
   const base_score = Math.max(
     0,
     Math.min(
@@ -488,7 +505,7 @@ function computeQualityFromYolo(yoloRaw: unknown, envStabilityScore: number): {
 
   if (reasons.length === 0) reasons.push("Belirgin kusur tespiti yok");
 
-  return { size, color, homogeneity, env_stability, quality_score, grade, market_recommendation, reasons };
+  return { applicable: true, size, color, homogeneity, env_stability, quality_score, grade, market_recommendation, reasons };
 }
 
 export function VisionManagementPage() {
@@ -496,6 +513,7 @@ export function VisionManagementPage() {
   const [yoloUrl, setYoloUrl] = useState(() => readLS(LS_YOLO));
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [yoloRaw, setYoloRaw] = useState<unknown>(null);
+  const [qualityTab, setQualityTab] = useState<"cocoon" | "larva">("cocoon");
 
   const [predictive, setPredictive] = useState<Record<string, unknown> | null>(null);
   const [predictiveErr, setPredictiveErr] = useState<string | null>(null);
@@ -617,6 +635,36 @@ export function VisionManagementPage() {
 
   const quality = useMemo(() => computeQualityFromYolo(yoloRaw, envStab.score), [yoloRaw, envStab.score]);
 
+  const larvaCount = useMemo(() => {
+    if (!yoloRaw || typeof yoloRaw !== "object") return 0;
+    const obj = yoloRaw as any;
+    const hint = obj?.extra?.stage_hint;
+    const hintCount = typeof hint?.larva_count === "number" && Number.isFinite(hint.larva_count) ? Math.max(0, Math.trunc(hint.larva_count)) : null;
+    if (hintCount !== null) return hintCount;
+
+    const dets = Array.isArray(obj.detections) ? obj.detections : Array.isArray(obj.predictions) ? obj.predictions : Array.isArray(obj.boxes) ? obj.boxes : [];
+    const labels = (Array.isArray(dets) ? dets : [])
+      .map((d: any) => String(d?.label ?? d?.class ?? d?.name ?? "").trim().toLowerCase())
+      .filter((s: string) => s.length > 0);
+    return labels.filter((s: string) => s === "larva" || s.includes("larva") || s.includes("böcek") || s.includes("bocek") || s.includes("kurt")).length;
+  }, [yoloRaw]);
+
+  const larvaMetrics = useMemo(() => {
+    if (!yoloRaw || typeof yoloRaw !== "object") return null;
+    const obj = yoloRaw as any;
+    const m = obj?.extra?.larva_metrics;
+    return m && typeof m === "object" ? (m as Record<string, unknown>) : null;
+  }, [yoloRaw]);
+
+  const molting = useMemo(() => {
+    if (!yoloRaw || typeof yoloRaw !== "object") return null;
+    const obj = yoloRaw as any;
+    const m = obj?.extra?.molting;
+    return m && typeof m === "object" ? (m as Record<string, unknown>) : null;
+  }, [yoloRaw]);
+
+  const renderScore = (v: number) => (quality.applicable ? String(Math.round(v)) : "-");
+
   return (
     <AppShell title="Vision Yönetimi" subtitle="Raspberry Pi kamera ve YOLO çıktı ayarları" right={<button className="k-btn" onClick={save}>Kaydet</button>}>
       <div className="k-grid">
@@ -632,89 +680,263 @@ export function VisionManagementPage() {
           <div style={{ display: "grid", gap: 10 }}>
             {envErr && <div className="k-alert">{envErr}</div>}
             {deviceCfgErr && <div className="k-alert">{deviceCfgErr}</div>}
-            <div style={{ display: "grid", gridTemplateColumns: "1.2fr .8fr", gap: 10, alignItems: "stretch" }}>
-              <div style={{ padding: 14, border: "1px solid var(--border)", borderRadius: 12, background: "var(--panel2)" }}>
-                <div className="k-sub">Genel Kalite Skoru</div>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-                  <div style={{ fontSize: 34, fontWeight: 900, lineHeight: 1 }}>{Math.round(quality.quality_score)}</div>
-                  <div style={{ fontWeight: 800, color: scoreColor(quality.quality_score) }}>{scoreLabel(quality.quality_score)}</div>
-                  <div
-                    style={{
-                      padding: "4px 10px",
-                      borderRadius: 999,
-                      border: "1px solid var(--border)",
-                      background: "rgba(255,255,255,.6)",
-                      fontWeight: 800
-                    }}
-                  >
-                    Sınıf: {quality.grade}
-                  </div>
-                </div>
-                <div className="k-sub" style={{ marginTop: 8 }}>
-                  Bu skor; kamera/YOLO tespitleri (Boyut, Renk, Homojenlik) ve ortam verilerinden (Çevresel Stabilite) hesaplanır.
-                </div>
-              </div>
-
-              <div style={{ padding: 14, border: "1px solid var(--border)", borderRadius: 12, background: "var(--panel2)" }}>
-                <div className="k-sub">Pazar Önerisi</div>
-                {(() => {
-                  const ui = marketUi(quality.market_recommendation);
-                  return (
-                    <div style={{ display: "grid", gap: 8 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                        <div style={{ fontWeight: 950, fontSize: 16, color: ui.color }}>{ui.label}</div>
-                        <div style={{ width: 10, height: 10, borderRadius: 99, background: ui.color }} />
-                      </div>
-                      {ui.desc ? <div className="k-sub">{ui.desc}</div> : null}
-                      <div className="k-sub">
-                        Ayarlardaki Evre: {formatStageDisplay(selectedStage)}
-                      </div>
-                      <div className="k-sub">Ortamin Raporladığı Evre: {formatStageDisplay(envLatestStage)}</div>
-                    </div>
-                  );
-                })()}
-              </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                className="k-btn"
+                onClick={() => setQualityTab("cocoon")}
+                style={{
+                  background: qualityTab === "cocoon" ? "rgba(124,92,255,.16)" : undefined,
+                  borderColor: qualityTab === "cocoon" ? "rgba(124,92,255,.28)" : undefined,
+                  padding: "8px 10px"
+                }}
+              >
+                Koza
+              </button>
+              <button
+                className="k-btn"
+                onClick={() => setQualityTab("larva")}
+                style={{
+                  background: qualityTab === "larva" ? "rgba(124,92,255,.16)" : undefined,
+                  borderColor: qualityTab === "larva" ? "rgba(124,92,255,.28)" : undefined,
+                  padding: "8px 10px"
+                }}
+              >
+                Larva
+              </button>
             </div>
 
-            <div style={{ padding: 12, border: "1px solid var(--border)", borderRadius: 12 }}>
-              <div className="k-sub" style={{ marginBottom: 8 }}>Bileşenler (Ağırlıklı)</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                {(
-                  [
-                    { key: "Boyut", weight: 0.3, value: quality.size },
-                    { key: "Renk", weight: 0.25, value: quality.color },
-                    { key: "Homojenlik", weight: 0.2, value: quality.homogeneity },
-                    { key: "Çevresel Stabilite", weight: 0.25, value: quality.env_stability }
-                  ] as const
-                ).map((c) => {
-                  const val = clamp0to100(c.value);
-                  const contrib = Math.round(val * c.weight);
-                  return (
-                    <div key={c.key} style={{ padding: 10, border: "1px dashed var(--border)", borderRadius: 12 }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                        <div style={{ fontWeight: 900 }}>{c.key}</div>
-                        <div className="k-sub">Ağırlık: {Math.round(c.weight * 100)}%</div>
-                      </div>
-                      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginTop: 6 }}>
-                        <div style={{ fontSize: 20, fontWeight: 900 }}>{Math.round(val)}</div>
-                        <div className="k-sub">Katkı: ~{contrib} puan</div>
-                      </div>
-                      <div style={{ height: 8, borderRadius: 99, background: "rgba(0,0,0,.06)", overflow: "hidden", marginTop: 8 }}>
-                        <div style={{ width: `${val}%`, height: "100%", background: scoreColor(val) }} />
-                      </div>
-                      {c.key === "Çevresel Stabilite" && thresholds ? (
-                        <div className="k-sub" style={{ marginTop: 8 }}>
-                          Optimum aralık: T {thresholds.t_min}–{thresholds.t_max} °C · H {thresholds.h_min}–{thresholds.h_max} % · CO2 {thresholds.co2_min}–{thresholds.co2_max}
-                        </div>
+            {qualityTab === "cocoon" ? (
+              <>
+                {!quality.applicable && (
+                  <div className="k-alert">
+                    Koza tespit edilmedi. Bu aşamada koza kalite skoru hesaplanmaz. (Larva/ön-koza görüntülerinde N/A)
+                  </div>
+                )}
+                <div style={{ display: "grid", gridTemplateColumns: "1.2fr .8fr", gap: 10, alignItems: "stretch" }}>
+                  <div style={{ padding: 14, border: "1px solid var(--border)", borderRadius: 12, background: "var(--panel2)" }}>
+                    <div className="k-sub">Genel Kalite Skoru</div>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+                      <div style={{ fontSize: 34, fontWeight: 900, lineHeight: 1 }}>{quality.applicable ? Math.round(quality.quality_score) : "N/A"}</div>
+                      {quality.applicable ? (
+                        <>
+                          <div style={{ fontWeight: 800, color: scoreColor(quality.quality_score) }}>{scoreLabel(quality.quality_score)}</div>
+                          <div
+                            style={{
+                              padding: "4px 10px",
+                              borderRadius: 999,
+                              border: "1px solid var(--border)",
+                              background: "rgba(255,255,255,.6)",
+                              fontWeight: 800
+                            }}
+                          >
+                            Sınıf: {quality.grade}
+                          </div>
+                        </>
                       ) : null}
                     </div>
-                  );
-                })}
+                    <div className="k-sub" style={{ marginTop: 8 }}>
+                      Bu skor; kamera/YOLO tespitleri (Boyut, Renk, Homojenlik) ve ortam verilerinden (Çevresel Stabilite) hesaplanır.
+                    </div>
+                  </div>
+
+                  <div style={{ padding: 14, border: "1px solid var(--border)", borderRadius: 12, background: "var(--panel2)" }}>
+                    <div className="k-sub">Pazar Önerisi</div>
+                    {(() => {
+                      const ui = quality.applicable ? marketUi(quality.market_recommendation) : marketUi("");
+                      return (
+                        <div style={{ display: "grid", gap: 8 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                            <div style={{ fontWeight: 950, fontSize: 16, color: ui.color }}>{ui.label}</div>
+                            <div style={{ width: 10, height: 10, borderRadius: 99, background: ui.color }} />
+                          </div>
+                          {ui.desc ? <div className="k-sub">{ui.desc}</div> : null}
+                          <div className="k-sub">Ayarlardaki Evre: {formatStageDisplay(selectedStage)}</div>
+                          <div className="k-sub">Ortamin Raporladığı Evre: {formatStageDisplay(envLatestStage)}</div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+
+                <div style={{ padding: 12, border: "1px solid var(--border)", borderRadius: 12 }}>
+                  <div className="k-sub" style={{ marginBottom: 8 }}>Bileşenler (Ağırlıklı)</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    {(
+                      [
+                        { key: "Boyut", weight: 0.3, value: quality.size },
+                        { key: "Renk", weight: 0.25, value: quality.color },
+                        { key: "Homojenlik", weight: 0.2, value: quality.homogeneity },
+                        { key: "Çevresel Stabilite", weight: 0.25, value: quality.env_stability }
+                      ] as const
+                    ).map((c) => {
+                      const val = clamp0to100(c.value);
+                      const contrib = Math.round(val * c.weight);
+                      return (
+                        <div key={c.key} style={{ padding: 10, border: "1px dashed var(--border)", borderRadius: 12 }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                            <div style={{ fontWeight: 900 }}>{c.key}</div>
+                            <div className="k-sub">Ağırlık: {Math.round(c.weight * 100)}%</div>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginTop: 6 }}>
+                            <div style={{ fontSize: 20, fontWeight: 900 }}>{c.key === "Çevresel Stabilite" ? renderScore(val) : quality.applicable ? renderScore(val) : "-"}</div>
+                            <div className="k-sub">Katkı: ~{contrib} puan</div>
+                          </div>
+                          <div style={{ height: 8, borderRadius: 99, background: "rgba(0,0,0,.06)", overflow: "hidden", marginTop: 8 }}>
+                            <div style={{ width: `${val}%`, height: "100%", background: scoreColor(val) }} />
+                          </div>
+                          {c.key === "Çevresel Stabilite" && thresholds ? (
+                            <div className="k-sub" style={{ marginTop: 8 }}>
+                              Optimum aralık: T {thresholds.t_min}–{thresholds.t_max} °C · H {thresholds.h_min}–{thresholds.h_max} % · CO2 {thresholds.co2_min}–{thresholds.co2_max}
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="k-sub" style={{ marginTop: 10 }}>
+                    Formül: (Boyut × 0.30) + (Renk × 0.25) + (Homojenlik × 0.20) + (Çevresel Stabilite × 0.25)
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div style={{ display: "grid", gap: 10 }}>
+                <div style={{ padding: 14, border: "1px solid var(--border)", borderRadius: 12, background: "var(--panel2)" }}>
+                  <div className="k-sub">Larva sayısı (yaklaşık)</div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+                    <div style={{ fontSize: 34, fontWeight: 900, lineHeight: 1 }}>{larvaCount}</div>
+                    <div className="k-sub">YOLO etiket sayımı / stage_hint</div>
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  {(() => {
+                    const m: any = larvaMetrics ?? {};
+                    const movementIndex = typeof m.movement_index === "number" && Number.isFinite(m.movement_index) ? (m.movement_index as number) : null;
+                    const movementLevel = typeof m.movement_level === "string" ? (m.movement_level as string) : null;
+                    const movementStage = typeof m.movement_stage === "string" ? (m.movement_stage as string) : null;
+                    const density =
+                      typeof m.larva_density_area_ratio === "number" && Number.isFinite(m.larva_density_area_ratio)
+                        ? (m.larva_density_area_ratio as number)
+                        : null;
+
+                    const levelUi = (() => {
+                      const l = (movementLevel || "").toLowerCase();
+                      if (l === "high_stress") return { label: "Stres", color: "#ef4444" };
+                      if (l === "low_risk") return { label: "Düşük (Risk)", color: "#f59e0b" };
+                      if (l === "normal") return { label: "Normal", color: "#22c55e" };
+                      return { label: movementLevel || "-", color: "var(--muted)" };
+                    })();
+
+                    return (
+                      <>
+                        <div style={{ padding: 12, border: "1px solid var(--border)", borderRadius: 12 }}>
+                          <div className="k-sub">Hareketlilik (movement_index)</div>
+                          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginTop: 6 }}>
+                            <div style={{ fontSize: 22, fontWeight: 900 }}>
+                              {movementIndex === null ? "-" : movementIndex.toFixed(3)}
+                            </div>
+                            <div className="k-sub">0–1</div>
+                          </div>
+                          <div className="k-sub" style={{ marginTop: 6 }}>Evre: {movementStage || "-"}</div>
+                        </div>
+
+                        <div style={{ padding: 12, border: "1px solid var(--border)", borderRadius: 12 }}>
+                          <div className="k-sub">Hareket seviyesi</div>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 8 }}>
+                            <div style={{ fontSize: 18, fontWeight: 900, color: levelUi.color }}>{levelUi.label}</div>
+                            <div style={{ width: 10, height: 10, borderRadius: 99, background: levelUi.color }} />
+                          </div>
+                          <div className="k-sub" style={{ marginTop: 6 }}>Kod: {movementLevel || "-"}</div>
+                        </div>
+
+                        <div style={{ padding: 12, border: "1px solid var(--border)", borderRadius: 12 }}>
+                          <div className="k-sub">Yoğunluk (alan oranı)</div>
+                          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginTop: 6 }}>
+                            <div style={{ fontSize: 22, fontWeight: 900 }}>{density === null ? "-" : (density * 100).toFixed(2)}</div>
+                            <div className="k-sub">%</div>
+                          </div>
+                          <div className="k-sub" style={{ marginTop: 6 }}>larva bbox toplam alanı / frame alanı</div>
+                        </div>
+
+                        <div style={{ padding: 12, border: "1px solid var(--border)", borderRadius: 12 }}>
+                          <div className="k-sub">Larva metrikleri (detay)</div>
+                          <details>
+                            <summary className="k-sub" style={{ cursor: "pointer" }}>JSON</summary>
+                            <pre className="k-json" style={{ margin: 0, maxHeight: 160 }}>
+                              {JSON.stringify(larvaMetrics ?? null, null, 2)}
+                            </pre>
+                          </details>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+
+                <div style={{ padding: 12, border: "1px solid var(--border)", borderRadius: 12 }}>
+                  <details>
+                    <summary style={{ cursor: "pointer", fontWeight: 900 }}>
+                      Gömlek değişimi (Molting) — referans süreler
+                    </summary>
+                    <div className="k-sub" style={{ marginTop: 8, marginBottom: 8 }}>
+                      Molting genelde evre geçişlerinde olur. Bu tablo sahadaki ortalama süreleri gösterir. Anlık durum alttaki “Molting durumu” kartında yer alır.
+                    </div>
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                        <thead>
+                          <tr>
+                            <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid var(--border)" }}>Geçiş</th>
+                            <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid var(--border)" }}>Süre</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(
+                            [
+                              { from: "Instar 1", to: "2", dur: "12–18 saat" },
+                              { from: "Instar 2", to: "3", dur: "16–24 saat" },
+                              { from: "Instar 3", to: "4", dur: "18–30 saat" },
+                              { from: "Instar 4", to: "5", dur: "24–36 saat" }
+                            ] as const
+                          ).map((r) => (
+                            <tr key={`${r.from}-${r.to}`}>
+                              <td style={{ padding: "8px 10px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>{r.from} → {r.to}</td>
+                              <td style={{ padding: "8px 10px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>{r.dur}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                </div>
+
+                <div style={{ padding: 12, border: "1px solid var(--border)", borderRadius: 12 }}>
+                  <div style={{ fontWeight: 900, marginBottom: 6 }}>Molting durumu (anlık)</div>
+                  {(() => {
+                    const m: any = molting ?? null;
+                    const state = typeof m?.state === "string" ? (m.state as string) : null;
+                    const sinceIso = typeof m?.since_iso === "string" ? (m.since_iso as string) : null;
+                    const dur = typeof m?.duration_sec === "number" && Number.isFinite(m.duration_sec) ? Math.max(0, Math.trunc(m.duration_sec)) : null;
+                    const durMin = dur === null ? null : Math.round(dur / 60);
+                    return (
+                      <div className="k-sub" style={{ marginBottom: 8 }}>
+                        Durum: {state ?? "-"}
+                        {sinceIso ? ` · Başlangıç: ${sinceIso}` : ""}
+                        {durMin !== null ? ` · Süre: ~${durMin} dk` : ""}
+                      </div>
+                    );
+                  })()}
+                  <pre className="k-json" style={{ margin: 0, maxHeight: 180 }}>{JSON.stringify(molting ?? null, null, 2)}</pre>
+                </div>
+
+                <div style={{ padding: 12, border: "1px solid var(--border)", borderRadius: 12 }}>
+                  <div style={{ fontWeight: 900, marginBottom: 6 }}>(Larva odaklı) metrikler</div>
+                  <div style={{ display: "grid", gap: 6 }}>
+                    <div>- Larva var/yok, yaklaşık adet/yoğunluk</div>
+                    <div>- Hareketlilik (movement)</div>
+                    <div>- Anomali/lekelenme (ayrı sınıflar veya ayrı model)</div>
+                  </div>
+                </div>
               </div>
-              <div className="k-sub" style={{ marginTop: 10 }}>
-                Formül: (Boyut × 0.30) + (Renk × 0.25) + (Homojenlik × 0.20) + (Çevresel Stabilite × 0.25)
-              </div>
-            </div>
+            )}
 
             <details>
               <summary className="k-sub" style={{ cursor: "pointer" }}>Detaylar</summary>

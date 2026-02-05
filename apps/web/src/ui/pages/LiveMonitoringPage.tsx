@@ -3,7 +3,7 @@ import { AppShell } from "../layout/AppShell";
 import { Card } from "../components/Card";
 import { Panel } from "../components/Panel";
 import { VisionPanel } from "../components/VisionPanel";
-import { getDeviceConfig, putDeviceConfig, type DeviceConfig, type StageThresholds } from "../services/api";
+import { getDeviceConfig, pushVisionStage, putDeviceConfig, type DeviceConfig, type StageThresholds } from "../services/api";
 import { formatRecommendedAction, formatStage, formatStressLevel } from "../utils/actionLabels";
 
 type DashboardSnapshot = {
@@ -319,6 +319,8 @@ export function LiveMonitoringPage() {
     return window.localStorage.getItem(LS_YOLO) ?? "";
   });
 
+  const [yoloRaw, setYoloRaw] = useState<unknown>(null);
+
   const [deviceCfg, setDeviceCfg] = useState<DeviceConfig>(() => ensureConfig(null));
   const [cfgLoading, setCfgLoading] = useState(false);
 
@@ -384,6 +386,17 @@ export function LiveMonitoringPage() {
   useEffect(() => {
     refresh();
   }, []);
+
+  const hasCocoonInYolo = useMemo(() => {
+    if (!yoloRaw || typeof yoloRaw !== "object") return null;
+    const obj = yoloRaw as any;
+    const dets = Array.isArray(obj.detections) ? obj.detections : Array.isArray(obj.predictions) ? obj.predictions : Array.isArray(obj.boxes) ? obj.boxes : [];
+    const labels = (Array.isArray(dets) ? dets : [])
+      .map((d: any) => String(d?.label ?? d?.class ?? d?.name ?? "").trim().toLowerCase())
+      .filter((s: string) => s.length > 0);
+    if (!labels.length) return false;
+    return labels.some((s: string) => s.includes("cocoon") || s.includes("koza"));
+  }, [yoloRaw]);
 
   const refreshConfigOnly = () => {
     setCfgLoading(true);
@@ -654,6 +667,17 @@ export function LiveMonitoringPage() {
               void putDeviceConfig({ deviceId: DEVICE_ID, config: nextCfg }).catch(() => {
                 setError("Aktif evre kaydedilemedi.");
               });
+
+              const y = yoloUrl.trim();
+              if (y) {
+                try {
+                  const u = new URL(y);
+                  const target = `${u.origin}/config/stage`;
+                  void pushVisionStage({ targetUrl: target, stage: next });
+                } catch {
+                  // ignore
+                }
+              }
             }}
             style={{ padding: "8px 10px" }}
           >
@@ -1165,7 +1189,13 @@ export function LiveMonitoringPage() {
           <VisionPanel
             cameraImageUrl={cameraUrl.trim() ? cameraUrl.trim() : null}
             yoloResultsUrl={yoloUrl.trim() ? yoloUrl.trim() : null}
+            onYoloRaw={(raw) => setYoloRaw(raw)}
           />
+          {hasCocoonInYolo === false && (
+            <div className="k-alert" style={{ marginTop: 10 }}>
+              Koza tespit edilmedi. Bu aşamada koza kalite skoru hesaplanmaz (N/A). Eğer görüntüler larva/ön-koza ise bu beklenen bir durumdur.
+            </div>
+          )}
         </Panel>
 
         <Panel title="Tahmin" subtitle="Risk skoru ve öneriler" span={6}>

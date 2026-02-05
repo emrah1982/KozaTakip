@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { OrchestratorToDashboardMessage } from "@kozatakip/shared";
-import { getDashboardSnapshot, getDeviceConfig, type DeviceConfig } from "../services/api";
+import { getDashboardSnapshot, getDeviceConfig, getVisionYoloLatest, type DeviceConfig } from "../services/api";
 import { AppShell } from "../layout/AppShell";
 import { Card } from "../components/Card";
 import { Panel } from "../components/Panel";
@@ -22,16 +22,21 @@ type Snapshot = {
 export function DashboardPage() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [deviceCfg, setDeviceCfg] = useState<DeviceConfig | null>(null);
+  const [yoloLatest, setYoloLatest] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const refresh = () => {
     setLoading(true);
     setError(null);
-    Promise.all([getDashboardSnapshot(), getDeviceConfig({ deviceId: DEVICE_ID })])
-      .then(([data, cfgRes]) => {
+    const yoloUrl = typeof window !== "undefined" ? window.localStorage.getItem("koza:vision:yolo_results_url") : null;
+    const pYolo = yoloUrl ? getVisionYoloLatest({ targetUrl: yoloUrl }).catch(() => null) : Promise.resolve(null);
+
+    Promise.all([getDashboardSnapshot(), getDeviceConfig({ deviceId: DEVICE_ID }), pYolo])
+      .then(([data, cfgRes, yolo]) => {
         setSnapshot(data);
         setDeviceCfg(cfgRes.config ?? null);
+        setYoloLatest(yolo);
       })
       .catch((e: unknown) => {
         setError(e instanceof Error ? e.message : "Unknown error");
@@ -68,6 +73,64 @@ export function DashboardPage() {
     typeof vision?.movement_intensity === "number" || typeof vision?.movement_intensity === "string"
       ? String(vision.movement_intensity)
       : "-";
+
+  const yExtra = useMemo(() => {
+    const e = yoloLatest?.extra;
+    return e && typeof e === "object" ? (e as Record<string, unknown>) : null;
+  }, [yoloLatest]);
+
+  const yLarva = useMemo(() => {
+    const m = (yExtra as any)?.larva_metrics;
+    return m && typeof m === "object" ? (m as Record<string, unknown>) : null;
+  }, [yExtra]);
+
+  const yMolting = useMemo(() => {
+    const m = (yExtra as any)?.molting;
+    return m && typeof m === "object" ? (m as Record<string, unknown>) : null;
+  }, [yExtra]);
+
+  const yDisease = useMemo(() => {
+    const d = (yExtra as any)?.diseased_confirmation;
+    return d && typeof d === "object" ? (d as Record<string, unknown>) : null;
+  }, [yExtra]);
+
+  const movementFallback = useMemo(() => {
+    const mi = (yLarva as any)?.movement_index;
+    if (typeof mi === "number" && Number.isFinite(mi)) return mi.toFixed(3);
+    if (typeof mi === "string") return mi;
+    return "-";
+  }, [yLarva]);
+
+  const riskFallback = useMemo(() => {
+    const confirmed = (yDisease as any)?.confirmed;
+    const hits = (yDisease as any)?.hits;
+    if (typeof confirmed === "boolean") {
+      const h = typeof hits === "number" && Number.isFinite(hits) ? ` (hits=${hits})` : "";
+      return `${confirmed ? "HIGH" : "LOW"}${h}`;
+    }
+    return "-";
+  }, [yDisease]);
+
+  const gradeFallback = useMemo(() => {
+    const confirmed = (yDisease as any)?.confirmed;
+    if (confirmed === true) return "RISK";
+    const moltingState = (yMolting as any)?.state;
+    if (typeof moltingState === "string" && (moltingState === "MOLTING" || moltingState === "PRE_MOLTING")) return "MOLTING";
+    const ml = (yLarva as any)?.movement_level;
+    if (ml === "high_stress") return "STRESS";
+    if (ml === "low_risk") return "LOW";
+    if (yExtra) return "OK";
+    return "-";
+  }, [yDisease, yMolting, yLarva, yExtra]);
+
+  const moltingLine = useMemo(() => {
+    const state = (yMolting as any)?.state;
+    const sinceIso = (yMolting as any)?.since_iso;
+    const durSec = (yMolting as any)?.duration_sec;
+    const durMin = typeof durSec === "number" && Number.isFinite(durSec) ? Math.round(Math.max(0, durSec) / 60) : null;
+    if (typeof state !== "string") return null;
+    return `Molting: ${state}${typeof sinceIso === "string" ? ` · ${sinceIso}` : ""}${durMin !== null ? ` · ~${durMin} dk` : ""}`;
+  }, [yMolting]);
 
   return (
     <AppShell
@@ -143,8 +206,9 @@ export function DashboardPage() {
             </div>
           ) : (
             <>
-              <div className="k-kpi">{String(riskLevel).toUpperCase()}</div>
+              <div className="k-kpi">{String(riskLevel).toUpperCase() !== "-" ? String(riskLevel).toUpperCase() : riskFallback}</div>
               <div className="k-sub">Risk skoru: {riskScore}</div>
+              {moltingLine ? <div className="k-sub">{moltingLine}</div> : null}
             </>
           )}
         </Card>
@@ -157,7 +221,7 @@ export function DashboardPage() {
             </div>
           ) : (
             <>
-              <div className="k-kpi">{String(qualityGrade).toUpperCase()}</div>
+              <div className="k-kpi">{String(qualityGrade).toUpperCase() !== "-" ? String(qualityGrade).toUpperCase() : gradeFallback}</div>
               <div className="k-sub">Quality agent (grade)</div>
             </>
           )}
@@ -171,7 +235,7 @@ export function DashboardPage() {
             </div>
           ) : (
             <>
-              <div className="k-kpi">{movement}</div>
+              <div className="k-kpi">{movement !== "-" ? movement : movementFallback}</div>
               <div className="k-sub">Vision agent (movement_intensity)</div>
             </>
           )}

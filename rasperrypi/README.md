@@ -44,3 +44,25 @@ Tarayıcıdan test:
 - CORS açıktır (`*`).
 - `KOZA_CAMERA_SOURCE` olarak `0` (USB / default) veya `rtsp/http` URL verilebilir.
 - `KOZA_YOLO_MODEL` ultralytics YOLO model dosyasıdır (`.pt`).
+
+## Docker Compose ile Çalıştırma (Raspberry Pi)
+
+`rasperrypi/` klasöründe örnek `Dockerfile` ve `docker-compose.yml` bulunur.
+
+Örnek:
+
+```bash
+cd rasperrypi
+
+# model dosyanı buraya koy
+mkdir -p models
+# models/best.pt
+
+docker compose up -d --build
+```
+
+Kamera notları:
+
+- USB kamera için genelde `devices: /dev/video0` yeterlidir.
+- Eğer kameran farklı bir index ile geliyorsa `/dev/video1` gibi ayarlamalısın.
+- Bazı sistemlerde kamera erişimi için `privileged: true` ve `group_add: video` gerekebilir.

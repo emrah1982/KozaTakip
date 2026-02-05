@@ -15,3 +15,7 @@ class YoloEngine(Protocol):
 
 class ResultPusher(Protocol):
   def maybe_push(self, yolo: YoloResult) -> None: ...
+
+
+class MetricExtractor(Protocol):
+  def extract(self, img_bgr, label: str, x1: float, y1: float, x2: float, y2: float): ...

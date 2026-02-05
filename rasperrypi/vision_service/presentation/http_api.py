@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -36,5 +38,15 @@ def create_app(frame_source, yolo_engine) -> FastAPI:
     if not y:
       return Response(status_code=404)
     return y
+
+  @app.post("/config/stage")
+  def set_stage(payload: Any):
+    if not payload or not isinstance(payload, dict):
+      return Response(status_code=400)
+    stage = payload.get("stage")
+    if not isinstance(stage, str) or not stage.strip():
+      return Response(status_code=400)
+    config.ACTIVE_STAGE = stage.strip()
+    return {"ok": True, "stage": config.ACTIVE_STAGE}
 
   return app

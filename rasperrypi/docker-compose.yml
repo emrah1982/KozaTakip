@@ -1,0 +1,25 @@
+services:
+  vision_service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kozatakip-vision-service:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      KOZA_BIND_HOST: "0.0.0.0"
+      KOZA_BIND_PORT: "8080"
+      KOZA_CAMERA_SOURCE: "0"
+      KOZA_CAMERA_FPS: "8"
+      KOZA_CAMERA_WIDTH: "1280"
+      KOZA_CAMERA_HEIGHT: "720"
+      KOZA_YOLO_MODEL: "/models/best.pt"
+      KOZA_CORS_ALLOW_ORIGINS: "*"
+    volumes:
+      - ./models:/models:ro
+    devices:
+      - "/dev/video0:/dev/video0"
+    group_add:
+      - "video"
+    privileged: true

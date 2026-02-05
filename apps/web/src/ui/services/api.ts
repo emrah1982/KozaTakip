@@ -139,3 +139,30 @@ export async function putDeviceConfig(params: { deviceId: string; config: Device
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return (await res.json()) as { ok: true };
 }
+
+export async function pushVisionStage(params: { targetUrl: string; stage: string }) {
+  const u = new URL(`${API_BASE}/api/vision/proxy/stage`);
+  u.searchParams.set("url", params.targetUrl);
+  const res = await fetch(u.toString(), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ stage: params.stage }),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return (await res.json()) as any;
+}
+
+export async function getVisionYoloLatest(params: { targetUrl: string }) {
+  const u = new URL(`${API_BASE}/api/vision/proxy/yolo`);
+  u.searchParams.set("url", params.targetUrl);
+  const res = await fetch(u.toString(), {
+    method: "GET",
+    headers: {
+      accept: "application/json",
+    },
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return (await res.json()) as any;
+}
