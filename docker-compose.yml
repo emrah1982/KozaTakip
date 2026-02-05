@@ -30,6 +30,7 @@ services:
       - DB_USER=kozatakip
       - DB_PASSWORD=kozatakip
       - DB_NAME=kozatakip
+      - ACTUATOR_API_KEY=koza_local_key_2026
     depends_on:
       - db
     ports:

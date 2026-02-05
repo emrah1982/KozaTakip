@@ -1,7 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "../layout/AppShell";
 import { Card } from "../components/Card";
 import { Panel } from "../components/Panel";
+import { VisionPanel } from "../components/VisionPanel";
+import { getDeviceConfig, putDeviceConfig, type DeviceConfig, type StageThresholds } from "../services/api";
+import { formatRecommendedAction, formatStage, formatStressLevel } from "../utils/actionLabels";
 
 type DashboardSnapshot = {
   latest: {
@@ -30,6 +33,106 @@ type EnvironmentMessage = {
 } & Record<string, unknown>;
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+const DEVICE_ID = import.meta.env.VITE_DEVICE_ID ?? "wemos-d1-r32-01";
+const ACTUATOR_API_KEY = import.meta.env.VITE_ACTUATOR_API_KEY ?? "koza_local_key_2026";
+
+const LS_CAMERA = "koza:vision:camera_image_url";
+const LS_YOLO = "koza:vision:yolo_results_url";
+
+const DEFAULT_STAGES = [
+  "egg_incubation",
+  "adaptation_0_1",
+  "larva_1",
+  "larva_2",
+  "larva_3",
+  "larva_4",
+  "larva_5",
+  "cocoon"
+] as const;
+
+const STAGE_LABELS: Record<(typeof DEFAULT_STAGES)[number], string> = {
+  egg_incubation: "Yumurta (Kuluçka)",
+  adaptation_0_1: "Adaptasyon (0–1 gün)",
+  larva_1: "1. Evre (Instar 1)",
+  larva_2: "2. Evre (Instar 2)",
+  larva_3: "3. Evre (Instar 3)",
+  larva_4: "4. Evre (Instar 4)",
+  larva_5: "5. Evre (Instar 5)",
+  cocoon: "Koza"
+};
+
+function defaultThresholds(stage: (typeof DEFAULT_STAGES)[number]): StageThresholds {
+  if (stage === "egg_incubation") return { t_min: 24, t_opt: 25.5, t_max: 27, h_min: 80, h_opt: 85, h_max: 90, co2_min: 400, co2_opt: 600, co2_max: 1000 };
+  if (stage === "adaptation_0_1") return { t_min: 27, t_opt: 28, t_max: 29, h_min: 88, h_opt: 90, h_max: 92, co2_min: 400, co2_opt: 600, co2_max: 800 };
+  if (stage === "larva_1") return { t_min: 26, t_opt: 27, t_max: 28, h_min: 85, h_opt: 88, h_max: 90, co2_min: 400, co2_opt: 650, co2_max: 900 };
+  if (stage === "larva_2") return { t_min: 25, t_opt: 26, t_max: 27, h_min: 80, h_opt: 83, h_max: 85, co2_min: 400, co2_opt: 700, co2_max: 1000 };
+  if (stage === "larva_3") return { t_min: 24, t_opt: 25, t_max: 26, h_min: 75, h_opt: 78, h_max: 80, co2_min: 400, co2_opt: 750, co2_max: 1100 };
+  if (stage === "larva_4") return { t_min: 23, t_opt: 24, t_max: 25, h_min: 70, h_opt: 73, h_max: 75, co2_min: 400, co2_opt: 800, co2_max: 1200 };
+  if (stage === "larva_5") return { t_min: 23, t_opt: 24, t_max: 25, h_min: 65, h_opt: 68, h_max: 70, co2_min: 400, co2_opt: 800, co2_max: 1200 };
+  return { t_min: 22, t_opt: 24, t_max: 25, h_min: 60, h_opt: 65, h_max: 70, co2_min: 400, co2_opt: 600, co2_max: 1000 };
+}
+
+function ensureConfig(cfg: DeviceConfig | null): DeviceConfig {
+  const stages: Record<string, StageThresholds> = { ...(cfg?.stages ?? {}) };
+  for (const s of DEFAULT_STAGES) {
+    if (!stages[s]) stages[s] = defaultThresholds(s);
+  }
+  const active_stage = typeof cfg?.active_stage === "string" && cfg.active_stage.length ? cfg.active_stage : "larva_4";
+  const auto_stage = {
+    enabled: Boolean(cfg?.auto_stage?.enabled),
+    start_stage:
+      typeof cfg?.auto_stage?.start_stage === "string" && cfg.auto_stage.start_stage.length
+        ? cfg.auto_stage.start_stage
+        : "larva_1",
+    start_at:
+      typeof cfg?.auto_stage?.start_at === "string" && cfg.auto_stage.start_at.length
+        ? cfg.auto_stage.start_at
+        : new Date().toISOString()
+  };
+  return { active_stage, auto_stage, stages };
+}
+
+function computeAutoStage(input: { startStage: string; startAtIso: string; nowMs: number }): string {
+  const order: (typeof DEFAULT_STAGES)[number][] = [
+    "egg_incubation",
+    "adaptation_0_1",
+    "larva_1",
+    "larva_2",
+    "larva_3",
+    "larva_4",
+    "larva_5",
+    "cocoon"
+  ];
+
+  const durationsDays: Record<(typeof DEFAULT_STAGES)[number], number> = {
+    egg_incubation: 10,
+    adaptation_0_1: 1,
+    larva_1: 3,
+    larva_2: 3,
+    larva_3: 4,
+    larva_4: 4,
+    larva_5: 8,
+    cocoon: 6
+  };
+
+  const startAt = new Date(input.startAtIso).getTime();
+  if (!Number.isFinite(startAt)) return input.startStage;
+
+  const elapsedDays = Math.max(0, Math.floor((input.nowMs - startAt) / (24 * 60 * 60 * 1000)));
+  const startIdx = order.indexOf(input.startStage as any);
+  if (startIdx < 0) return input.startStage;
+
+  let idx = startIdx;
+  let remaining = elapsedDays;
+  while (idx < order.length - 1) {
+    const d = durationsDays[order[idx]] ?? 0;
+    if (d <= 0) break;
+    if (remaining < d) break;
+    remaining -= d;
+    idx += 1;
+  }
+  return order[idx];
+}
 
 async function logActuatorAudit(input: {
   actuator: "ventilation" | "lighting" | "heater" | "humidifier";
@@ -40,12 +143,35 @@ async function logActuatorAudit(input: {
   try {
     const res = await fetch(`${API_BASE}/api/actuators/audit`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...(ACTUATOR_API_KEY ? { "x-api-key": ACTUATOR_API_KEY } : {})
+      },
       body: JSON.stringify(input)
     });
     if (!res.ok) {
       return;
     }
+  } catch {
+    return;
+  }
+}
+
+async function sendActuatorCommand(input: {
+  actuator: "ventilation" | "lighting" | "heater" | "humidifier";
+  mode: "manual" | "auto";
+  state: boolean;
+}) {
+  try {
+    const res = await fetch(`${API_BASE}/api/actuators/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(ACTUATOR_API_KEY ? { "x-api-key": ACTUATOR_API_KEY } : {})
+      },
+      body: JSON.stringify({ ...input, device_id: DEVICE_ID })
+    });
+    if (!res.ok) return;
   } catch {
     return;
   }
@@ -173,11 +299,30 @@ function Gauge(props: {
   );
 }
 
+function ensureOpt(v: number | undefined, min: number, max: number) {
+  if (typeof v !== "number" || !Number.isFinite(v)) return (min + max) / 2;
+  return v;
+}
+
 export function LiveMonitoringPage() {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
   const [envSeries, setEnvSeries] = useState<EnvironmentMessage[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const [cameraUrl, setCameraUrl] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    return window.localStorage.getItem(LS_CAMERA) ?? "";
+  });
+  const [yoloUrl, setYoloUrl] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    return window.localStorage.getItem(LS_YOLO) ?? "";
+  });
+
+  const [deviceCfg, setDeviceCfg] = useState<DeviceConfig>(() => ensureConfig(null));
+  const [cfgLoading, setCfgLoading] = useState(false);
+
+  const [nowTick, setNowTick] = useState(0);
 
   const [ventMode, setVentMode] = useState<"auto" | "manual">(() => {
     if (typeof window === "undefined") return "auto";
@@ -222,18 +367,75 @@ export function LiveMonitoringPage() {
   const refresh = () => {
     setLoading(true);
     setError(null);
-    Promise.all([fetchSnapshot(), fetchEnvironmentSeries(60)])
-      .then(([snap, series]) => {
+    setCfgLoading(true);
+    Promise.all([fetchSnapshot(), fetchEnvironmentSeries(60), getDeviceConfig({ deviceId: DEVICE_ID })])
+      .then(([snap, series, cfgResp]) => {
         setSnapshot(snap);
         setEnvSeries(series);
+        setDeviceCfg(ensureConfig(cfgResp.config));
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Bilinmeyen hata"))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        setCfgLoading(false);
+      });
   };
 
   useEffect(() => {
     refresh();
   }, []);
+
+  const refreshConfigOnly = () => {
+    setCfgLoading(true);
+    void getDeviceConfig({ deviceId: DEVICE_ID })
+      .then((cfgResp) => {
+        setDeviceCfg(ensureConfig(cfgResp.config));
+      })
+      .catch(() => {
+        return;
+      })
+      .finally(() => setCfgLoading(false));
+  };
+
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "koza:device_config:updated_at") {
+        refreshConfigOnly();
+      }
+      if (e.key === LS_CAMERA) {
+        setCameraUrl(typeof e.newValue === "string" ? e.newValue : "");
+      }
+      if (e.key === LS_YOLO) {
+        setYoloUrl(typeof e.newValue === "string" ? e.newValue : "");
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setCameraUrl(window.localStorage.getItem(LS_CAMERA) ?? "");
+    setYoloUrl(window.localStorage.getItem(LS_YOLO) ?? "");
+  }, []);
+
+  useEffect(() => {
+    const onFocus = () => refreshConfigOnly();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNowTick((v) => v + 1), 60 * 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    refreshConfigOnly();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nowTick]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -282,22 +484,74 @@ export function LiveMonitoringPage() {
   const stressLevel = typeof latestEnv?.stress_level === "string" ? latestEnv.stress_level : "-";
   const stage = typeof latestEnv?.stage === "string" ? latestEnv.stage : "-";
 
+  const selectedStage = (typeof deviceCfg.active_stage === "string" && deviceCfg.active_stage.length
+    ? deviceCfg.active_stage
+    : "larva_4") as (typeof DEFAULT_STAGES)[number] | string;
+
+  const autoEnabled = Boolean(deviceCfg.auto_stage?.enabled);
+  const autoStage = useMemo(() => {
+    if (!autoEnabled) return selectedStage;
+    return computeAutoStage({
+      startStage: deviceCfg.auto_stage?.start_stage ?? "larva_1",
+      startAtIso: deviceCfg.auto_stage?.start_at ?? new Date().toISOString(),
+      nowMs: Date.now()
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoEnabled, deviceCfg.auto_stage?.start_stage, deviceCfg.auto_stage?.start_at, selectedStage, nowTick]);
+
+  const effectiveStage = autoStage;
+
+  useEffect(() => {
+    if (!autoEnabled) return;
+    if (typeof effectiveStage !== "string" || effectiveStage.length === 0) return;
+    const current = deviceCfg.active_stage ?? "";
+    if (current === effectiveStage) return;
+
+    const nextCfg: DeviceConfig = { ...deviceCfg, active_stage: effectiveStage };
+    setDeviceCfg(nextCfg);
+    void putDeviceConfig({ deviceId: DEVICE_ID, config: nextCfg }).catch(() => {
+      setError("Otomatik evre güncellemesi API’ye yazılamadı.");
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoEnabled, effectiveStage]);
+
+  const thresholds =
+    (typeof effectiveStage === "string" && deviceCfg.stages[effectiveStage]) ||
+    (DEFAULT_STAGES.includes(effectiveStage as any) ? defaultThresholds(effectiveStage as any) : defaultThresholds("larva_4"));
+
+  const tOkMin = thresholds.t_min;
+  const tOkOpt = ensureOpt(thresholds.t_opt, thresholds.t_min, thresholds.t_max);
+  const tOkMax = thresholds.t_max;
+  const hOkMin = thresholds.h_min;
+  const hOkOpt = ensureOpt(thresholds.h_opt, thresholds.h_min, thresholds.h_max);
+  const hOkMax = thresholds.h_max;
+  const co2OkMin = thresholds.co2_min;
+  const co2OkOpt = Math.trunc(ensureOpt(thresholds.co2_opt, thresholds.co2_min, thresholds.co2_max));
+  const co2OkMax = thresholds.co2_max;
+
   const recommendedActions = Array.isArray(latestEnv?.recommended_action)
     ? (latestEnv?.recommended_action as unknown[]).filter((v): v is string => typeof v === "string")
     : [];
-  const ventilationRequested = recommendedActions.includes("increase_ventilation");
+  const normalizedActions = recommendedActions.map((a) =>
+    String(a)
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "_")
+      .replace(/-+/g, "_")
+  );
+  const ventilationRequested = normalizedActions.includes("increase_ventilation");
   const lightingRequested =
-    recommendedActions.includes("increase_lighting") ||
-    recommendedActions.includes("turn_on_lights") ||
-    recommendedActions.includes("lights_on");
+    normalizedActions.includes("increase_lighting") ||
+    normalizedActions.includes("turn_on_lights") ||
+    normalizedActions.includes("lights_on");
   const heaterRequested =
-    recommendedActions.includes("increase_heating") ||
-    recommendedActions.includes("turn_on_heater") ||
-    recommendedActions.includes("heater_on");
+    normalizedActions.includes("increase_heating") ||
+    normalizedActions.includes("turn_on_heater") ||
+    normalizedActions.includes("heater_on");
   const humidifierRequested =
-    recommendedActions.includes("increase_humidity") ||
-    recommendedActions.includes("turn_on_humidifier") ||
-    recommendedActions.includes("humidifier_on");
+    normalizedActions.includes("increase_humidity") ||
+    normalizedActions.includes("turn_on_humidifier") ||
+    normalizedActions.includes("humidifier_on");
 
   const ventEffectiveOn = ventMode === "auto" ? ventilationRequested : ventManualOn;
   const lightEffectiveOn = lightMode === "auto" ? lightingRequested : lightManualOn;
@@ -308,7 +562,7 @@ export function LiveMonitoringPage() {
     actuator: "ventilation" | "lighting" | "heater" | "humidifier"
   ): Record<string, unknown> => {
     const base: Record<string, unknown> = {
-      stage,
+      stage: effectiveStage,
       stress_level: stressLevel,
       env_timestamp: typeof latestEnv?.timestamp === "string" ? latestEnv.timestamp : null
     };
@@ -339,6 +593,7 @@ export function LiveMonitoringPage() {
 
   const onVentManual = (next: boolean) => {
     setVentManualOn(next);
+    void sendActuatorCommand({ actuator: "ventilation", mode: "manual", state: next });
     void logActuatorAudit({
       actuator: "ventilation",
       mode: "manual",
@@ -349,6 +604,7 @@ export function LiveMonitoringPage() {
 
   const onLightManual = (next: boolean) => {
     setLightManualOn(next);
+    void sendActuatorCommand({ actuator: "lighting", mode: "manual", state: next });
     void logActuatorAudit({
       actuator: "lighting",
       mode: "manual",
@@ -359,6 +615,7 @@ export function LiveMonitoringPage() {
 
   const onHeaterManual = (next: boolean) => {
     setHeaterManualOn(next);
+    void sendActuatorCommand({ actuator: "heater", mode: "manual", state: next });
     void logActuatorAudit({
       actuator: "heater",
       mode: "manual",
@@ -369,6 +626,7 @@ export function LiveMonitoringPage() {
 
   const onHumidifierManual = (next: boolean) => {
     setHumidifierManualOn(next);
+    void sendActuatorCommand({ actuator: "humidifier", mode: "manual", state: next });
     void logActuatorAudit({
       actuator: "humidifier",
       mode: "manual",
@@ -382,11 +640,55 @@ export function LiveMonitoringPage() {
       title="Canlı İzleme"
       subtitle="Ortam sensörleri ve görüntü sinyalleri (anlık)"
       onRefresh={refresh}
+      right={
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <div style={{ color: "var(--muted)", fontSize: 12 }}>Aktif Evre</div>
+          <select
+            className="k-btn"
+            value={effectiveStage}
+            disabled={cfgLoading || loading || autoEnabled}
+            onChange={(e) => {
+              const next = e.target.value;
+              const nextCfg = { ...deviceCfg, active_stage: next };
+              setDeviceCfg(nextCfg);
+              void putDeviceConfig({ deviceId: DEVICE_ID, config: nextCfg }).catch(() => {
+                setError("Aktif evre kaydedilemedi.");
+              });
+            }}
+            style={{ padding: "8px 10px" }}
+          >
+            {DEFAULT_STAGES.map((s) => (
+              <option key={s} value={s}>
+                {STAGE_LABELS[s]}
+              </option>
+            ))}
+          </select>
+          {autoEnabled && <div className="k-sub">Otomatik</div>}
+        </div>
+      }
     >
       {error && <div className="k-alert">{error}</div>}
 
       <div className="k-grid">
-        <Card title="Sıcaklık" span={4}>
+        <Card
+          title="Sıcaklık"
+          span={4}
+          right={
+            <span
+              style={{
+                fontSize: 12,
+                padding: "6px 10px",
+                borderRadius: 999,
+                background: "rgba(250, 204, 21, 0.18)",
+                border: "1px solid rgba(250, 204, 21, 0.35)",
+                color: "rgba(0,0,0,.72)",
+                fontWeight: 600
+              }}
+            >
+              Opt {tOkOpt.toFixed(1)}°C
+            </span>
+          }
+        >
           {loading && !snapshot && !envSeries ? (
             <div style={{ display: "grid", gap: 10 }}>
               <div className="k-skeleton" style={{ width: 120, height: 28 }} />
@@ -394,12 +696,30 @@ export function LiveMonitoringPage() {
             </div>
           ) : (
             <>
-              <Gauge value={temperature} unit="°C" min={10} max={40} okMin={24} okMax={28} decimals={1} />
+              <Gauge value={temperature} unit="°C" min={10} max={40} okMin={tOkMin} okMax={tOkMax} decimals={1} />
             </>
           )}
         </Card>
 
-        <Card title="Nem" span={4}>
+        <Card
+          title="Nem"
+          span={4}
+          right={
+            <span
+              style={{
+                fontSize: 12,
+                padding: "6px 10px",
+                borderRadius: 999,
+                background: "rgba(250, 204, 21, 0.18)",
+                border: "1px solid rgba(250, 204, 21, 0.35)",
+                color: "rgba(0,0,0,.72)",
+                fontWeight: 600
+              }}
+            >
+              Opt {hOkOpt}%
+            </span>
+          }
+        >
           {loading && !snapshot && !envSeries ? (
             <div style={{ display: "grid", gap: 10 }}>
               <div className="k-skeleton" style={{ width: 120, height: 28 }} />
@@ -407,12 +727,30 @@ export function LiveMonitoringPage() {
             </div>
           ) : (
             <>
-              <Gauge value={humidity} unit="%" min={30} max={100} okMin={75} okMax={85} decimals={0} />
+              <Gauge value={humidity} unit="%" min={30} max={100} okMin={hOkMin} okMax={hOkMax} decimals={0} />
             </>
           )}
         </Card>
 
-        <Card title="CO₂" span={4}>
+        <Card
+          title="CO₂"
+          span={4}
+          right={
+            <span
+              style={{
+                fontSize: 12,
+                padding: "6px 10px",
+                borderRadius: 999,
+                background: "rgba(250, 204, 21, 0.18)",
+                border: "1px solid rgba(250, 204, 21, 0.35)",
+                color: "rgba(0,0,0,.72)",
+                fontWeight: 600
+              }}
+            >
+              Opt {co2OkOpt} ppm
+            </span>
+          }
+        >
           {loading && !snapshot && !envSeries ? (
             <div style={{ display: "grid", gap: 10 }}>
               <div className="k-skeleton" style={{ width: 120, height: 28 }} />
@@ -420,7 +758,7 @@ export function LiveMonitoringPage() {
             </div>
           ) : (
             <>
-              <Gauge value={co2ppm} unit="ppm" min={400} max={2500} okMin={400} okMax={1200} decimals={0} />
+              <Gauge value={co2ppm} unit="ppm" min={400} max={2500} okMin={co2OkMin} okMax={co2OkMax} decimals={0} />
             </>
           )}
         </Card>
@@ -787,16 +1125,25 @@ export function LiveMonitoringPage() {
             <div style={{ display: "grid", gap: 10 }}>
               <div style={{ display: "grid", gap: 4 }}>
                 <div className="k-sub">Evre</div>
-                <div style={{ fontWeight: 700 }}>{String(stage).toUpperCase()}</div>
+                <div style={{ fontWeight: 700 }}>{typeof effectiveStage === "string" ? formatStage(effectiveStage) : "-"}</div>
               </div>
               <div style={{ display: "grid", gap: 4 }}>
                 <div className="k-sub">Stres seviyesi</div>
-                <div style={{ fontWeight: 700 }}>{String(stressLevel).toUpperCase()}</div>
+                <div style={{ fontWeight: 700 }}>
+                  {typeof stressLevel === "string" && stressLevel.length ? formatStressLevel(stressLevel) : "-"}
+                </div>
               </div>
               <div style={{ display: "grid", gap: 4 }}>
                 <div className="k-sub">Önerilen aksiyonlar</div>
                 <pre className="k-json" style={{ maxHeight: 160 }}>
-                  {JSON.stringify(latestEnv?.recommended_action ?? [], null, 2)}
+                  {JSON.stringify(
+                    (Array.isArray(latestEnv?.recommended_action)
+                      ? (latestEnv?.recommended_action as unknown[]).filter((v): v is string => typeof v === "string")
+                      : []
+                    ).map((a) => formatRecommendedAction(a)),
+                    null,
+                    2
+                  )}
                 </pre>
               </div>
             </div>
@@ -812,6 +1159,13 @@ export function LiveMonitoringPage() {
           ) : (
             <pre className="k-json">{JSON.stringify(snapshot?.latest.vision ?? null, null, 2)}</pre>
           )}
+        </Panel>
+
+        <Panel title="Kamera & YOLO" subtitle="Raspberry Pi görüntüsü ve model tespitleri" span={12}>
+          <VisionPanel
+            cameraImageUrl={cameraUrl.trim() ? cameraUrl.trim() : null}
+            yoloResultsUrl={yoloUrl.trim() ? yoloUrl.trim() : null}
+          />
         </Panel>
 
         <Panel title="Tahmin" subtitle="Risk skoru ve öneriler" span={6}>

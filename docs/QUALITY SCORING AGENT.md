@@ -8,6 +8,11 @@ GİRDİLER:
 
 SORUMLULUKLAR:
 - Koza kalite skorunu hesaplamak
+Kalite Skoru =
+(Boyut × 0.30) +
+(Renk × 0.25) +
+(Homojenlik × 0.20) +
+(Çevresel Stabilite × 0.25)
 - A / B / C sınıflandırması yapmak
 - Satış / ayrıştırma önerisi üretmek
 

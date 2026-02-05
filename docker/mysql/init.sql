@@ -33,6 +33,31 @@ CREATE TABLE IF NOT EXISTS actuator_audit (
   INDEX idx_actuator_audit_actuator_created_at (actuator, created_at)
 );
 
+CREATE TABLE IF NOT EXISTS actuator_commands (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  created_at DATETIME(3) NOT NULL,
+  device_id VARCHAR(64) NOT NULL,
+  actuator VARCHAR(32) NOT NULL,
+  mode VARCHAR(16) NOT NULL,
+  state TINYINT(1) NOT NULL,
+  status VARCHAR(16) NOT NULL,
+  claimed_at DATETIME(3) NULL,
+  processed_at DATETIME(3) NULL,
+  processed_ok TINYINT(1) NULL,
+  PRIMARY KEY (id),
+  INDEX idx_actuator_commands_device_status_created (device_id, status, created_at),
+  INDEX idx_actuator_commands_created_at (created_at)
+);
+
+CREATE TABLE IF NOT EXISTS device_status (
+  device_id VARCHAR(64) NOT NULL,
+  last_seen_at DATETIME(3) NOT NULL,
+  last_rssi INT NULL,
+  last_ip VARCHAR(64) NULL,
+  PRIMARY KEY (device_id),
+  INDEX idx_device_status_last_seen_at (last_seen_at)
+);
+
 INSERT INTO demo_environment (ts, stage, temperature, humidity, co2_ppm, stress_level)
 SELECT * FROM (
   SELECT

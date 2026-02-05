@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import type { OrchestratorToDashboardMessage } from "@kozatakip/shared";
-import { getDashboardSnapshot } from "../services/api";
+import { getDashboardSnapshot, getDeviceConfig, type DeviceConfig } from "../services/api";
 import { AppShell } from "../layout/AppShell";
 import { Card } from "../components/Card";
 import { Panel } from "../components/Panel";
 import { StatusBadge } from "../components/StatusBadge";
+import { formatOverallStatus, formatStage, formatStressLevel, humanizeKeyOrText } from "../utils/actionLabels";
+
+const DEVICE_ID = import.meta.env.VITE_DEVICE_ID ?? "wemos-d1-r32-01";
 
 type Snapshot = {
   orchestrator: OrchestratorToDashboardMessage;
@@ -18,15 +21,17 @@ type Snapshot = {
 
 export function DashboardPage() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [deviceCfg, setDeviceCfg] = useState<DeviceConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const refresh = () => {
     setLoading(true);
     setError(null);
-    getDashboardSnapshot()
-      .then((data) => {
+    Promise.all([getDashboardSnapshot(), getDeviceConfig({ deviceId: DEVICE_ID })])
+      .then(([data, cfgRes]) => {
         setSnapshot(data);
+        setDeviceCfg(cfgRes.config ?? null);
       })
       .catch((e: unknown) => {
         setError(e instanceof Error ? e.message : "Unknown error");
@@ -48,6 +53,10 @@ export function DashboardPage() {
   const predictive = snapshot?.latest.predictive as Record<string, unknown> | null | undefined;
   const quality = snapshot?.latest.quality as Record<string, unknown> | null | undefined;
 
+  const envStageRaw = typeof env?.stage === "string" ? (env.stage as string) : "-";
+  const cfgStageRaw = typeof deviceCfg?.active_stage === "string" ? deviceCfg.active_stage : "-";
+  const stageRaw = cfgStageRaw !== "-" ? cfgStageRaw : envStageRaw;
+  const envStage = stageRaw === "-" ? "-" : formatStage(stageRaw);
   const envStress = typeof env?.stress_level === "string" ? (env.stress_level as string) : "-";
   const riskLevel = typeof predictive?.risk_level === "string" ? (predictive.risk_level as string) : "-";
   const riskScore =
@@ -77,7 +86,7 @@ export function DashboardPage() {
             </div>
           ) : (
             <>
-              <div className="k-kpi">{status.toUpperCase()}</div>
+              <div className="k-kpi">{formatOverallStatus(status)}</div>
               <div className="k-sub">Sistemin genel risk ve stres durum özeti</div>
             </>
           )}
@@ -119,8 +128,9 @@ export function DashboardPage() {
             </div>
           ) : (
             <>
-              <div className="k-kpi">{String(envStress).toUpperCase()}</div>
-              <div className="k-sub">Environment agent (stress_level)</div>
+              <div className="k-sub">Evre: {envStage}</div>
+              <div className="k-kpi">{typeof envStress === "string" ? formatStressLevel(envStress) : String(envStress)}</div>
+              <div className="k-sub">Çevresel değerlendirme (stres seviyesi)</div>
             </>
           )}
         </Card>
@@ -177,7 +187,7 @@ export function DashboardPage() {
           ) : reasons.length ? (
             <ul className="k-list">
               {reasons.map((r: string, i: number) => (
-                <li key={i}>{r}</li>
+                <li key={i}>{humanizeKeyOrText(r)}</li>
               ))}
             </ul>
           ) : (
@@ -194,7 +204,7 @@ export function DashboardPage() {
           ) : actions.length ? (
             <ul className="k-list">
               {actions.map((a: string, i: number) => (
-                <li key={i}>{a}</li>
+                <li key={i}>{humanizeKeyOrText(a)}</li>
               ))}
             </ul>
           ) : (
@@ -203,7 +213,17 @@ export function DashboardPage() {
         </Panel>
 
         <Panel title="Son Ham Veriler" subtitle="Ajanlardan gelen son mesajlar" span={12}>
-          <pre className="k-json">{JSON.stringify(snapshot?.latest ?? null, null, 2)}</pre>
+          <pre className="k-json">
+            {JSON.stringify(
+              {
+                stage_source: cfgStageRaw !== "-" ? "device_config.active_stage" : envStageRaw !== "-" ? "environment.stage" : "-",
+                stage_raw: stageRaw,
+                latest: snapshot?.latest ?? null
+              },
+              null,
+              2
+            )}
+          </pre>
         </Panel>
       </div>
     </AppShell>

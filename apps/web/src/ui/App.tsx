@@ -5,6 +5,7 @@ import { LiveMonitoringPage } from "./pages/LiveMonitoringPage";
 import { MessagesPage } from "./pages/MessagesPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { VisionManagementPage } from "./pages/VisionManagementPage";
 
 export function App() {
   return (
@@ -12,6 +13,7 @@ export function App() {
       <Route path="/" element={<Navigate to="/panel" replace />} />
       <Route path="/panel" element={<DashboardPage />} />
       <Route path="/canli-izleme" element={<LiveMonitoringPage />} />
+      <Route path="/vision-yonetimi" element={<VisionManagementPage />} />
       <Route path="/alarmlar" element={<AlertsPage />} />
       <Route path="/mesajlar" element={<MessagesPage />} />
       <Route path="/raporlar" element={<ReportsPage />} />

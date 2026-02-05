@@ -113,6 +113,14 @@ CO₂ eşikleri:
 * ≥1500 ppm → Uyarı
 * ≥3000 ppm → Acil alarm
 
+Detaylı evre bazlı referanslar:
+
+* `docs/Evrelerine Gore Optimum Cevre Kosullari.md`
+* `docs/EVRE_BAZLI_ALARM_AKSIYON_MATRISI.md`
+* `docs/ALARM_VERILERINDEN_AI_FEATURE_LISTESI.md`
+* `docs/BESLEME_PLANI_VE_YEMEK_RECETELERI.md`
+* `docs/GERCEK_DUNYA_KALITE_OLCUMU.md`
+
 ---
 
 ## 📸 Kamera ve Karanlık Ortam Yaklaşımı
